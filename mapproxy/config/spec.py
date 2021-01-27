@@ -122,6 +122,12 @@ cache_types = {
         'sqlite_wal': bool(),
         'tile_lock_dir': str(),
     },
+    'mbtiles_dimensions': {
+        'directory': str(),
+        'sqlite_timeout': number(),
+        'sqlite_wal': bool(),
+        'tile_lock_dir': str(),
+    },
     'geopackage': {
         'filename': str(),
         'directory': str(),

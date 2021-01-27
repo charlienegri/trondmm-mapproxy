@@ -140,18 +140,18 @@ class MBTilesCache(TileCacheBase):
         if tile.source:
             return True
 
-        return self.load_tile(tile)
+        return self.load_tile(tile, dimensions=None)
 
     def store_tile(self, tile, dimensions=None):
         if tile.stored:
             return True
         return self._store_bulk([tile])
 
-    def store_tiles(self, tiles):
+    def store_tiles(self, tiles, dimensions=None):
         tiles = [t for t in tiles if not t.stored]
         return self._store_bulk(tiles)
 
-    def _store_bulk(self, tiles):
+    def _store_bulk(self, tiles, dimensions=None):
         records = []
         # tile_buffer (as_buffer) will encode the tile to the target format
         # we collect all tiles before, to avoid having the db transaction
@@ -256,7 +256,7 @@ class MBTilesCache(TileCacheBase):
 
         return loaded_tiles == len(tile_dict)
 
-    def remove_tile(self, tile):
+    def remove_tile(self, tile, dimensions=None):
         cursor = self.db.cursor()
         cursor.execute(
             "DELETE FROM tiles WHERE (tile_column = ? AND tile_row = ? AND zoom_level = ?)",
@@ -266,7 +266,7 @@ class MBTilesCache(TileCacheBase):
             return True
         return False
 
-    def remove_level_tiles_before(self, level, timestamp):
+    def remove_level_tiles_before(self, level, timestamp, dimensions=None):
         if timestamp == 0:
             cursor = self.db.cursor()
             cursor.execute(
@@ -287,7 +287,7 @@ class MBTilesCache(TileCacheBase):
                 return True
             return False
 
-    def load_tile_metadata(self, tile):
+    def load_tile_metadata(self, tile, dimensions=None):
         if not self.supports_timestamp:
             # MBTiles specification does not include timestamps.
             # This sets the timestamp of the tile to epoch (1970s)
@@ -390,3 +390,168 @@ class MBTilesLevelCache(TileCacheBase):
             return True
         else:
             return level_cache.remove_level_tiles_before(level, timestamp)
+
+
+class MBTilesDimensionsCache(TileCacheBase):
+    supports_timestamp = False
+
+    def __init__(self, mbtiles_dir, dimensionlist, timeout=30, wal=False, dim_separator="\034"):
+        self.lock_cache_id = 'sqlite-' + hashlib.md5(mbtiles_dir.encode('utf-8')).hexdigest()
+        self.cache_dir = mbtiles_dir
+        self.dimensionlist = dimensionlist
+        self._mbtiles = {}
+        self.dim_separator = dim_separator
+        self.timeout = timeout
+        self.wal = wal
+        self._mbtiles_lock = threading.Lock()
+
+    def _get_mbfile(self, dimensions):
+
+        dimvalues = []
+        for dim in self.dimensionlist:
+            dimvalues.append(str(dimensions[dim]))
+
+        dimkey = self.dim_separator.join(dimvalues)
+        
+        if dimkey in self._mbtiles:
+            return self._mbtiles[dimkey]
+
+        with self._mbtiles_lock:
+            if dimkey not in self._mbtiles:
+                mbtile_filename = os.path.join(self.cache_dir, *dimvalues) + ".mbtiles"
+                self._mbtiles[dimkey] = MBTilesCache(
+                    mbtile_filename,
+                    with_timestamps=False,
+                    timeout=self.timeout,
+                    wal=self.wal,
+                )
+
+        return self._mbtiles[dimkey]
+
+    def cleanup(self):
+        """
+        Close all open connection and remove them from cache.
+        """
+        with self._mbtiles_lock:
+            for mbtile in self._mbtiles.values():
+                mbtile.cleanup()
+
+    def is_cached(self, tile, dimensions):
+        if tile.coord is None:
+            return True
+        if tile.source:
+            return True
+
+        return self._get_mbfile(dimensions).is_cached(tile)
+
+    def store_tile(self, tile, dimensions):
+        if tile.stored:
+            return True
+
+        return self._get_mbfile(dimensions).store_tile(tile)
+
+    def store_tiles(self, tiles, dimensions):
+        return self._get_mbfile(dimensions).store_tiles(tiles)
+
+    def load_tile(self, tile, with_metadata=False, dimensions=None):
+        if tile.source or tile.coord is None:
+            return True
+
+        return self._get_mbfile(dimensions).load_tile(tile, with_metadata=with_metadata)
+
+    def load_tiles(self, tiles, with_metadata=False, dimensions=None):
+        return self._get_mbfile(dimensions).load_tiles(tiles, with_metadata=with_metadata)
+
+    def remove_tile(self, tile, dimensions):
+        if tile.coord is None:
+            return True
+
+        return self._get_mbfile(dimensions).remove_tile(tile)
+
+    def load_tile_metadata(self, tile, dimensions):
+        self.load_tile(tile, dimensions)
+
+    def remove_level_tiles_before(self, level, timestamp, dimensions):
+        return self._get_mbfile(dimensions).remove_level_tiles_before(level, timestamp)
+
+
+class MBTilesDimensionsLevelCache(TileCacheBase):
+    supports_timestamp = False
+
+    def __init__(self, mbtiles_dir, dimensionlist, timeout=30, wal=False, dim_separator="\034"):
+        self.lock_cache_id = 'sqlite-' + hashlib.md5(mbtiles_dir.encode('utf-8')).hexdigest()
+        self.cache_dir = mbtiles_dir
+        self.dimensionlist = dimensionlist
+        self._mbtiles = {}
+        self.dim_separator = dim_separator
+        self.timeout = timeout
+        self.wal = wal
+        self._mbtiles_lock = threading.Lock()
+
+    def _get_mbfile(self, dimensions):
+
+        dimvalues = []
+        for dim in self.dimensionlist:
+            dimvalues.append(str(dimensions[dim]))
+
+        dimkey = self.dim_separator.join(dimvalues)
+        
+        if dimkey in self._mbtiles:
+            return self._mbtiles[dimkey]
+
+        with self._mbtiles_lock:
+            if dimkey not in self._mbtiles:
+                mbtile_filename = os.path.join(self.cache_dir, *dimvalues) + ".mbtiles"
+                self._mbtiles[dimkey] = MBTilesLevelCache(
+                    mbtiles_dir,
+                    timeout=self.timeout,
+                    wal=self.wal,
+                )
+
+        return self._mbtiles[dimkey]
+
+    def cleanup(self):
+        """
+        Close all open connection and remove them from cache.
+        """
+        with self._mbtiles_lock:
+            for mbtile in self._mbtiles.values():
+                mbtile.cleanup()
+
+    def is_cached(self, tile, dimensions):
+        if tile.coord is None:
+            return True
+        if tile.source:
+            return True
+
+        return self._get_mbfile(dimensions).is_cached(tile)
+
+    def store_tile(self, tile, dimensions):
+        if tile.stored:
+            return True
+
+        return self._get_mbfile(dimensions).store_tile(tile)
+
+    def store_tiles(self, tiles, dimensions):
+        return self._get_mbfile(dimensions).store_tiles(tiles)
+
+    def load_tile(self, tile, with_metadata=False, dimensions=None):
+        if tile.source or tile.coord is None:
+            return True
+
+        return self._get_mbfile(dimensions).load_tile(tile, with_metadata=with_metadata)
+
+    def load_tiles(self, tiles, with_metadata=False, dimensions=None):
+        return self._get_mbfile(dimensions).load_tiles(tiles, with_metadata=with_metadata)
+
+    def remove_tile(self, tile, dimensions):
+        if tile.coord is None:
+            return True
+
+        return self._get_mbfile(dimensions).remove_tile(tile)
+
+    def load_tile_metadata(self, tile, dimensions):
+        self.load_tile(tile, dimensions)
+
+    def remove_level_tiles_before(self, level, timestamp, dimensions):
+        return self._get_mbfile(dimensions).remove_level_tiles_before(level, timestamp)
