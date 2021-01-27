@@ -90,10 +90,6 @@
     <Layer>
       <ows:Title>{{layer.title}}</ows:Title>
       <ows:Abstract></ows:Abstract>
-      <ows:WGS84BoundingBox>
-        <ows:LowerCorner>{{layer.md['extent'].llbbox[0]}} {{layer.md['extent'].llbbox[1]}}</ows:LowerCorner>
-        <ows:UpperCorner>{{layer.md['extent'].llbbox[2]}} {{layer.md['extent'].llbbox[3]}}</ows:UpperCorner>
-      </ows:WGS84BoundingBox>
       <ows:Identifier>{{layer.name}}</ows:Identifier>
       <Style>
         <ows:Identifier>default</ows:Identifier>
