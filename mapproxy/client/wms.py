@@ -27,7 +27,7 @@ from mapproxy.image.opts import ImageOptions
 from mapproxy.featureinfo import create_featureinfo_doc
 
 import logging
-log = logging.getLogger('mapproxy.source.wms')
+log = logging.getLogger('mapproxy.client.wms')
 
 class WMSClient(object):
     def __init__(self, request_template, http_client=None,
