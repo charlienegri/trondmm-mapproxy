@@ -56,7 +56,7 @@ def level_location(level, cache_dir, dimensionlist=None, dimensions=None):
         return os.path.join(cache_dir, dim_path, level)
     else:
         return os.path.join(cache_dir, dim_path, "%02d" % level)
-<<<<<<< HEAD
+#<<<<<<< HEAD
 
 def dimensions_part(dimensionlist, dimensions):
     """
@@ -68,7 +68,7 @@ def dimensions_part(dimensionlist, dimensions):
         dims = NoCaseMultiDict(dimensions)
         return os.path.join(*(map(lambda k: str(dims.get(k, 'default')),
                                   dimensionlist)))
-=======
+#=======
 
 #def dimensions_part(dimensions):
 #    """
