@@ -22,7 +22,7 @@ from mapproxy.config.validator import validate_references
 
 class TestValidator(object):
     def _test_conf(self, yaml_part=None):
-        base = yaml.load('''
+        base = yaml.safe_load('''
             services:
                 wms:
                     md:
@@ -43,7 +43,7 @@ class TestValidator(object):
                         layers: one
         ''')
         if yaml_part is not None:
-            base.update(yaml.load(yaml_part))
+            base.update(yaml.safe_load(yaml_part))
         return base
 
     def test_valid_config(self):
@@ -204,6 +204,33 @@ class TestValidator(object):
             "Supported layers for source 'one_source' are 'one' but tagged source "
             "requested layers 'foo, bar'"
         ]
+
+    def test_tagged_layer_sources_with_layers(self):
+        conf = self._test_conf('''
+            layers:
+                - name: one
+                  title: One
+                  sources: ['one_source:foo,bar']
+        ''')
+
+        errors = validate_references(conf)
+        assert errors == [
+            "Supported layers for source 'one_source' are 'one' but tagged source "
+            "requested layers 'foo, bar'"
+        ]
+
+    def test_tagged_layer_sources_without_layers(self):
+        conf = self._test_conf('''
+            layers:
+                - name: one
+                  title: One
+                  sources: ['one_source:foo,bar']
+        ''')
+
+        del conf['sources']['one_source']['req']['layers']
+
+        errors = validate_references(conf)
+        assert errors == []
 
     def test_tagged_source_without_layers(self):
         conf = self._test_conf('''

@@ -30,7 +30,7 @@ log = logging.getLogger('mapproxy.config')
 
 from mapproxy.config import load_default_config, finish_base_config, defaults
 from mapproxy.config.validator import validate_references
-from mapproxy.config.spec import validate_options
+from mapproxy.config.spec import validate_options, add_source_to_mapproxy_yaml_spec, add_service_to_mapproxy_yaml_spec
 from mapproxy.util.py import memoize
 from mapproxy.util.ext.odict import odict
 from mapproxy.util.yaml import load_yaml_file, YAMLError
@@ -84,6 +84,7 @@ class ProxyConfiguration(object):
     def load_sources(self):
         self.sources = SourcesCollection()
         for source_name, source_conf in iteritems((self.configuration.get('sources') or {})):
+            source_conf['name'] = source_name
             self.sources[source_name] = SourceConfiguration.load(conf=source_conf, context=self)
 
     def load_tile_layers(self):
@@ -293,7 +294,7 @@ class GridConfiguration(ConfigurationBase):
             global_key='image.max_shrink_factor')
 
         if conf.get('origin') is None:
-            log.warn('grid %s does not have an origin. default origin will change from sw (south/west) to nw (north-west) with MapProxy 2.0',
+            log.warning('grid %s does not have an origin. default origin will change from sw (south/west) to nw (north-west) with MapProxy 2.0',
                 conf['name'],
             )
 
@@ -318,6 +319,22 @@ class GridConfiguration(ConfigurationBase):
         return grid
 
 
+def preferred_srs(conf):
+    from mapproxy.srs import SRS, PreferredSrcSRS
+
+    preferred_conf = conf.get('preferred_src_proj', {})
+
+    if not preferred_conf:
+        return
+
+    preferred = PreferredSrcSRS()
+
+    for target, preferred_srcs in preferred_conf.items():
+        preferred.add(SRS(target), [SRS(s) for s in preferred_srcs])
+
+    return preferred
+
+
 class GlobalConfiguration(ConfigurationBase):
     def __init__(self, conf_base_dir, conf, context):
         ConfigurationBase.__init__(self, conf, context)
@@ -327,6 +344,7 @@ class GlobalConfiguration(ConfigurationBase):
         finish_base_config(self.base_config)
 
         self.image_options = ImageOptionsConfiguration(self.conf.get('image', {}), context)
+        self.preferred_srs = preferred_srs(self.conf.get('srs', {}))
         self.renderd_address = self.get_value('renderd.address')
 
     def _copy_conf_values(self, d, target):
@@ -395,6 +413,11 @@ class ImageOptionsConfiguration(ConfigurationBase):
         jpeg_quality = options.pop('jpeg_quality', None)
         if jpeg_quality and not isinstance(jpeg_quality, int):
             raise ConfigurationError('jpeg_quality is not an integer')
+
+        tiff_compression = options.pop('tiff_compression', None)
+        if tiff_compression and tiff_compression not in ('raw', 'tiff_lzw', 'jpeg'):
+            raise ConfigurationError('unknown tiff_compression')
+
         quantizer = options.pop('quantizer', None)
         if quantizer and quantizer not in ('fastoctree', 'mediancut'):
             raise ConfigurationError('unknown quantizer')
@@ -549,6 +572,14 @@ class SourceConfiguration(ConfigurationBase):
             self.conf.setdefault('image', {})['transparent'] = self.conf['transparent']
         return self.context.globals.image_options.image_opts(self.conf.get('image', {}), format)
 
+    def supported_srs(self):
+        from mapproxy.srs import SRS, SupportedSRS
+
+        supported_srs = [SRS(code) for code in self.conf.get('supported_srs', [])]
+        if not supported_srs:
+            return None
+        return SupportedSRS(supported_srs, self.context.globals.preferred_srs)
+
     def http_client(self, url):
         from mapproxy.client.http import auth_data_from_url, HTTPClient
 
@@ -561,10 +592,13 @@ class SourceConfiguration(ConfigurationBase):
 
         timeout = self.context.globals.get_value('http.client_timeout', self.conf)
         headers = self.context.globals.get_value('http.headers', self.conf)
+        hide_error_details = self.context.globals.get_value('http.hide_error_details', self.conf)
+        manage_cookies = self.context.globals.get_value('http.manage_cookies', self.conf)
 
         http_client = HTTPClient(url, username, password, insecure=insecure,
                                  ssl_ca_certs=ssl_ca_certs, timeout=timeout,
-                                 headers=headers)
+                                 headers=headers, hide_error_details=hide_error_details,
+                                 manage_cookies=manage_cookies)
         return http_client, url
 
     @memoize
@@ -578,11 +612,12 @@ class SourceConfiguration(ConfigurationBase):
                 raise ConfigurationError("invalid error code %r in on_error", status_code)
             cacheable = response_conf.get('cache', False)
             color = response_conf.get('response', 'transparent')
+            authorize_stale = response_conf.get('authorize_stale', False)
             if color == 'transparent':
                 color = (255, 255, 255, 0)
             else:
                 color = parse_color(color)
-            error_handler.add_handler(status_code, color, cacheable)
+            error_handler.add_handler(status_code, color, cacheable, authorize_stale)
 
         return error_handler
 
@@ -614,8 +649,6 @@ class ArcGISSourceConfiguration(SourceConfiguration):
             from mapproxy.source import DummySource
             return DummySource(coverage=self.coverage())
 
-        # Get the supported SRS codes and formats from the configuration.
-        supported_srs = [SRS(code) for code in self.conf.get("supported_srs", [])]
         supported_formats = [file_ext(f) for f in self.conf.get("supported_formats", [])]
 
         # Construct the parameters
@@ -635,8 +668,9 @@ class ArcGISSourceConfiguration(SourceConfiguration):
         image_opts = self.image_opts(format=params.get('format'))
         return ArcGISSource(client, image_opts=image_opts, coverage=coverage,
                             res_range=res_range,
-                            supported_srs=supported_srs,
-                            supported_formats=supported_formats or None)
+                            supported_srs=self.supported_srs(),
+                            supported_formats=supported_formats or None,
+                            error_handler=self.on_error_handler())
 
     @memoize
     def fi_source(self, params=None):
@@ -649,7 +683,6 @@ class ArcGISSourceConfiguration(SourceConfiguration):
         request_format = self.conf['req'].get('format')
         if request_format:
             params['format'] = request_format
-        supported_srs = [SRS(code) for code in self.conf.get('supported_srs', [])]
         fi_source = None
         if self.conf.get('opts', {}).get('featureinfo', False):
             opts = self.conf['opts']
@@ -661,7 +694,7 @@ class ArcGISSourceConfiguration(SourceConfiguration):
 
             http_client, fi_request.url = self.http_client(fi_request.url)
             fi_client = ArcGISInfoClient(fi_request,
-                supported_srs=supported_srs,
+                supported_srs=self.supported_srs(),
                 http_client=http_client,
                 tolerance=tolerance,
                 return_geometries=return_geometries,
@@ -696,7 +729,10 @@ class WMSSourceConfiguration(SourceConfiguration):
             if not has_xslt_support:
                 raise ValueError('featureinfo_xslt requires lxml. Please install.')
             fi_xslt = context.globals.abspath(fi_xslt)
-            fi_transformer = XSLTransformer(fi_xslt)
+            fi_format = conf.get('featureinfo_out_format')
+            if not fi_format:
+                fi_format = conf.get('featureinfo_format')
+            fi_transformer = XSLTransformer(fi_xslt, fi_format)
         return fi_transformer
 
     def image_opts(self, format=None):
@@ -711,7 +747,7 @@ class WMSSourceConfiguration(SourceConfiguration):
         from mapproxy.client.wms import WMSClient
         from mapproxy.request.wms import create_request
         from mapproxy.source.wms import WMSSource
-        from mapproxy.srs import SRS
+        from mapproxy.srs import SRS, SupportedSRS
 
         if not self.conf.get('wms_opts', {}).get('map', True):
             return None
@@ -728,7 +764,6 @@ class WMSSourceConfiguration(SourceConfiguration):
 
         image_opts = self.image_opts(format=params.get('format'))
 
-        supported_srs = [SRS(code) for code in self.conf.get('supported_srs', [])]
         supported_formats = [file_ext(f) for f in self.conf.get('supported_formats', [])]
         version = self.conf.get('wms_opts', {}).get('version', '1.1.1')
 
@@ -766,9 +801,10 @@ class WMSSourceConfiguration(SourceConfiguration):
         return WMSSource(client, image_opts=image_opts, coverage=coverage,
                          res_range=res_range, transparent_color=transparent_color,
                          transparent_color_tolerance=transparent_color_tolerance,
-                         supported_srs=supported_srs,
+                         supported_srs=self.supported_srs(),
                          supported_formats=supported_formats or None,
-                         fwd_req_params=fwd_req_params)
+                         fwd_req_params=fwd_req_params,
+                         error_handler=self.on_error_handler())
 
     def fi_source(self, params=None):
         from mapproxy.client.wms import WMSInfoClient
@@ -780,7 +816,6 @@ class WMSSourceConfiguration(SourceConfiguration):
         request_format = self.conf['req'].get('format')
         if request_format:
             params['format'] = request_format
-        supported_srs = [SRS(code) for code in self.conf.get('supported_srs', [])]
         fi_source = None
         if self.conf.get('wms_opts', {}).get('featureinfo', False):
             wms_opts = self.conf['wms_opts']
@@ -795,7 +830,7 @@ class WMSSourceConfiguration(SourceConfiguration):
                                                      self.context)
 
             http_client, fi_request.url = self.http_client(fi_request.url)
-            fi_client = WMSInfoClient(fi_request, supported_srs=supported_srs,
+            fi_client = WMSInfoClient(fi_request, supported_srs=self.supported_srs(),
                                       http_client=http_client)
             coverage = self.coverage()
             fi_source = WMSInfoSource(fi_client, fi_transformer=fi_transformer,
@@ -885,7 +920,8 @@ class MapnikSourceConfiguration(SourceConfiguration):
         if concurrent_requests:
             from mapproxy.util.lock import SemLock
             lock_dir = self.context.globals.get_path('cache.lock_dir', self.conf)
-            md5 = hashlib.md5(self.conf['mapfile'])
+            mapfile = self.conf['mapfile']
+            md5 = hashlib.md5(mapfile.encode('utf-8'))
             lock_file = os.path.join(lock_dir, md5.hexdigest() + '.lck')
             lock = lambda: SemLock(lock_file, concurrent_requests)
 
@@ -944,7 +980,7 @@ class TileSourceConfiguration(SourceConfiguration):
 
         grid_name = self.conf.get('grid')
         if grid_name is None:
-            log.warn("tile source for %s does not have a grid configured and defaults to GLOBAL_MERCATOR. default will change with MapProxy 2.0", url)
+            log.warning("tile source for %s does not have a grid configured and defaults to GLOBAL_MERCATOR. default will change with MapProxy 2.0", url)
             grid_name = "GLOBAL_MERCATOR"
 
         grid = self.context.grids[grid_name].tile_grid()
@@ -984,6 +1020,32 @@ source_configuration_types = {
 }
 
 
+def register_source_configuration(config_name, config_class,
+                                  yaml_spec_source_name = None, yaml_spec_source_def = None):
+    """ Method used by plugins to register a new source configuration.
+
+        :param config_name: Name of the source configuration
+        :type config_name: str
+        :param config_class: Class of the source configuration
+        :type config_name: SourceConfiguration
+        :param yaml_spec_source_name: Name of the source in the YAML configuration file
+        :type yaml_spec_source_name: str
+        :param yaml_spec_source_def: Definition of the source in the YAML configuration file
+        :type yaml_spec_source_def: dict
+
+        Example:
+            register_source_configuration('hips', HIPSSourceConfiguration,
+                                          'hips', { required('url'): str(),
+                                                    'resampling_method': str(),
+                                                    'image': image_opts,
+                                                  })
+    """
+    log.info('Registering configuration for plugin source %s' % config_name)
+    source_configuration_types[config_name] = config_class
+    if yaml_spec_source_name is not None and yaml_spec_source_def is not None:
+        add_source_to_mapproxy_yaml_spec(yaml_spec_source_name, yaml_spec_source_def)
+
+
 class CacheConfiguration(ConfigurationBase):
     defaults = {'format': 'image/png'}
 
@@ -992,7 +1054,7 @@ class CacheConfiguration(ConfigurationBase):
         cache_dir = self.conf.get('cache', {}).get('directory')
         if cache_dir:
             if self.conf.get('cache_dir'):
-                log.warn('found cache.directory and cache_dir option for %s, ignoring cache_dir',
+                log.warning('found cache.directory and cache_dir option for %s, ignoring cache_dir',
                 self.conf['name'])
             return self.context.globals.abspath(cache_dir)
 
@@ -1030,11 +1092,15 @@ class CacheConfiguration(ConfigurationBase):
             global_key='cache.link_single_color_images')
 
         if link_single_color_images and sys.platform == 'win32':
-            log.warn('link_single_color_images not supported on windows')
+            log.warning('link_single_color_images not supported on windows')
             link_single_color_images = False
 
+#<<<<<<< HEAD
         dimensionlist = self.context.globals.get_value('dimensions', self.conf,
                                                     global_key='cache.dimensions')
+#=======
+
+#>>>>>>> upstream/master
         return FileCache(
             cache_dir,
             file_ext=file_ext,
@@ -1455,8 +1521,8 @@ class CacheConfiguration(ConfigurationBase):
         from mapproxy.layer import map_extent_from_grid, merge_layer_extents
 
         base_image_opts = self.image_opts()
-        if self.conf.get('format') == 'mixed' and not self.conf.get('request_format') == 'image/png':
-            raise ConfigurationError('request_format must be set to image/png if mixed mode is enabled')
+        if self.conf.get('format') == 'mixed' and not self.conf.get('request_format') in [ 'image/png', 'image/vnd.jpeg-png' ]:
+            raise ConfigurationError('request_format must be set to image/png or image/vnd.jpeg-png if mixed mode is enabled')
         request_format = self.conf.get('request_format') or self.conf.get('format')
         if '/' in request_format:
             request_format_ext = request_format.split('/', 1)[1]
@@ -1475,6 +1541,22 @@ class CacheConfiguration(ConfigurationBase):
             global_key='cache.minimize_meta_requests')
         concurrent_tile_creators = self.context.globals.get_value('concurrent_tile_creators', self.conf,
             global_key='cache.concurrent_tile_creators')
+
+        cache_rescaled_tiles = self.conf.get('cache_rescaled_tiles')
+        upscale_tiles = self.conf.get('upscale_tiles', 0)
+        if upscale_tiles < 0:
+            raise ConfigurationError("upscale_tiles must be positive")
+        downscale_tiles = self.conf.get('downscale_tiles', 0)
+        if downscale_tiles < 0:
+            raise ConfigurationError("downscale_tiles must be positive")
+        if upscale_tiles and downscale_tiles:
+            raise ConfigurationError("cannot use both upscale_tiles and downscale_tiles")
+
+        rescale_tiles = 0
+        if upscale_tiles:
+            rescale_tiles = -upscale_tiles
+        if downscale_tiles:
+            rescale_tiles = downscale_tiles
 
         renderd_address = self.context.globals.get_value('renderd.address', self.conf)
 
@@ -1546,8 +1628,11 @@ class CacheConfiguration(ConfigurationBase):
                         lock_timeout=self.context.globals.get_value('http.client_timeout', {}),
                         lock_cache_id=cache.lock_cache_id,
                 )
+#<<<<<<< HEAD
             dimensionlist = self.context.globals.get_value('dimensions', self.conf,
                                                            global_key='cache.dimensions')
+#=======
+#>>>>>>> upstream/master
 
             mgr = TileManager(tile_grid, cache, sources, image_opts.format.ext,
                 locker=locker,
@@ -1559,8 +1644,15 @@ class CacheConfiguration(ConfigurationBase):
                 pre_store_filter=tile_filter,
                 tile_creator_class=tile_creator_class,
                 bulk_meta_tiles=bulk_meta_tiles,
+#<<<<<<< HEAD
                 dimensions=dimensionlist,
+#=======
+                cache_rescaled_tiles=cache_rescaled_tiles,
+                rescale_tiles=rescale_tiles,
+#>>>>>>> upstream/master
             )
+            if self.conf['name'] in self.context.caches:
+                mgr._refresh_before = self.context.caches[self.conf['name']].conf.get('refresh_before', {})
             extent = merge_layer_extents(sources)
             if extent.is_default:
                 extent = map_extent_from_grid(tile_grid)
@@ -1571,7 +1663,7 @@ class CacheConfiguration(ConfigurationBase):
     def grid_confs(self):
         grid_names = self.conf.get('grids')
         if grid_names is None:
-            log.warn('cache %s does not have any grids. default will change from [GLOBAL_MERCATOR] to [GLOBAL_WEBMERCATOR] with MapProxy 2.0',
+            log.warning('cache %s does not have any grids. default will change from [GLOBAL_MERCATOR] to [GLOBAL_WEBMERCATOR] with MapProxy 2.0',
                 self.conf['name'])
             grid_names = ['GLOBAL_MERCATOR']
         return [(g, self.context.grids[g]) for g in grid_names]
@@ -1590,12 +1682,13 @@ class CacheConfiguration(ConfigurationBase):
                 main_grid = grid
             caches.append((CacheMapLayer(tile_manager, extent=extent, image_opts=image_opts,
                                          max_tile_limit=max_tile_limit),
-                          (grid.srs,)))
+                          grid.srs))
 
         if len(caches) == 1:
             layer = caches[0][0]
         else:
-            layer = SRSConditional(caches, caches[0][0].extent, opacity=image_opts.opacity)
+            layer = SRSConditional(caches, caches[0][0].extent, opacity=image_opts.opacity,
+                                   preferred_srs=self.context.globals.preferred_srs)
 
         if 'use_direct_from_level' in self.conf:
             self.conf['use_direct_from_res'] = main_grid.resolution(self.conf['use_direct_from_level'])
@@ -1700,20 +1793,40 @@ class LayerConfiguration(ConfigurationBase):
                         lg_sources.append(lg_source)
 
         res_range = resolution_range(self.conf)
+#<<<<<<< HEAD
         dimensions = self.dimensions()
 
         layer = WMSLayer(self.conf.get('name'), self.conf.get('title'),
                          sources, fi_sources, lg_sources, res_range=res_range, md=self.conf.get('md'),
                          dimensions=dimensions)
+#=======
+#        dimensions = None
+#        if 'dimensions' in self.conf.keys():
+#            dimensions = self.dimensions()
+
+#        layer = WMSLayer(self.conf.get('name'), self.conf.get('title'),
+#                         sources, fi_sources, lg_sources, res_range=res_range, md=self.conf.get('md'),dimensions=dimensions)
+#>>>>>>> upstream/master
         return layer
 
     @memoize
     def dimensions(self):
         from mapproxy.layer import Dimension
+        from mapproxy.util.ext.wmsparse.util import parse_datetime_range
         dimensions = {}
-
         for dimension, conf in iteritems(self.conf.get('dimensions', {})):
-            values = [str(val) for val in  conf.get('values', ['default'])]
+            raw_values = conf.get('values')
+            if len(raw_values) == 1:
+                # look for time or dim_reference_time
+                if 'time' in dimension.lower():
+                    log.debug('Determining values as datetime strings')
+                    values = parse_datetime_range(raw_values[0])
+                else:
+                    log.debug('Determining values as plain strings')
+                    values = raw_values[0].strip().split('/')
+            else:
+                values = [str(val) for val in  conf.get('values', ['default'])]
+            
             default = conf.get('default', values[-1])
             dimensions[dimension.lower()] = Dimension(dimension, values, default=default)
         return dimensions
@@ -1723,8 +1836,11 @@ class LayerConfiguration(ConfigurationBase):
         from mapproxy.service.tile import TileLayer
         from mapproxy.cache.dummy import DummyCache
         from mapproxy.cache.file import FileCache
+#<<<<<<< HEAD
         from mapproxy.cache.mbtiles import MBTilesDimensionsCache
 
+#=======
+#>>>>>>> upstream/master
         sources = []
         fi_only_sources = []
         if 'tile_sources' in self.conf:
@@ -1764,11 +1880,21 @@ class LayerConfiguration(ConfigurationBase):
                 fi_source = self.context.sources[fi_source_name].fi_source()
                 if fi_source:
                     fi_sources.append(fi_source)
-
+                      
             for grid, extent, cache_source in self.context.caches[cache_name].caches():
+#<<<<<<< HEAD
                 log.info("Cache source: " + str(type(cache_source.cache)))
                 if dimensions and not isinstance(cache_source.cache, (FileCache, MBTilesDimensionsCache, DummyCache)):
                     # caching of dimension layers is only supported by FileCache and MBTilesDimensionsCache
+#=======
+#                disable_storage = self.context.configuration['caches'][cache_name].get('disable_storage', False)
+#                if disable_storage:
+#                    supported_cache_class = DummyCache
+#                else:
+#                    supported_cache_class = FileCache
+#                if dimensions and not isinstance(cache_source.cache, supported_cache_class):
+#                    # caching of dimension layers is not supported yet
+#>>>>>>> upstream/master
                     raise ConfigurationError(
                         "caching of dimension layer (%s) is not supported yet by this cache backend."
                         " need to use a FileCache or MBTilesDimensionsCache, or `disable_storage: true` on %s cache" % (self.conf['name'], cache_name)
@@ -1827,6 +1953,28 @@ def extents_for_srs(bbox_srs):
     return extents
 
 
+plugin_services = {}
+
+def register_service_configuration(service_name, service_creator,
+                                   yaml_spec_service_name = None, yaml_spec_service_def = None):
+    """ Method used by plugins to register a new service.
+
+        :param service_name: Name of the service
+        :type service_name: str
+        :param service_creator: Creator method of the service
+        :type service_creator: method of type (serviceConfiguration: ServiceConfiguration, conf: dict) -> Server
+        :param yaml_spec_service_name: Name of the service in the YAML configuration file
+        :type yaml_spec_service_name: str
+        :param yaml_spec_service_def: Definition of the service in the YAML configuration file
+        :type yaml_spec_service_def: dict
+    """
+
+    log.info('Registering configuration for plugin service %s' % service_name)
+    plugin_services[service_name] = service_creator
+    if yaml_spec_service_name is not None and yaml_spec_service_def is not None:
+        add_service_to_mapproxy_yaml_spec(yaml_spec_service_name, yaml_spec_service_def)
+
+
 class ServiceConfiguration(ConfigurationBase):
     def __init__(self, conf, context):
         if 'wms' in conf:
@@ -1843,9 +1991,15 @@ class ServiceConfiguration(ConfigurationBase):
         for service_name, service_conf in iteritems(self.conf):
             creator = getattr(self, service_name + '_service', None)
             if not creator:
-                raise ValueError('unknown service: %s' % service_name)
+                # If not a known service, try to use the plugin mechanism
+                global plugin_services
+                creator = plugin_services.get(service_name, None)
+                if not creator:
+                    raise ValueError('unknown service: %s' % service_name)
+                new_services = creator(self, service_conf or {})
+            else:
+                new_services = creator(service_conf or {})
 
-            new_services = creator(service_conf or {})
             # a creator can return a list of services...
             if not isinstance(new_services, (list, tuple)):
                 new_services = [new_services]
@@ -1930,7 +2084,7 @@ class ServiceConfiguration(ConfigurationBase):
             fi_template = conf.get('restful_featureinfo_template')
             if template and '{{' in template:
                 # TODO remove warning in 1.6
-                log.warn("double braces in WMTS restful_template are deprecated {{x}} -> {x}")
+                log.warning("double braces in WMTS restful_template are deprecated {{x}} -> {x}")
             services.append(
                 WMTSRestServer(
                     layers, md, template=template,
@@ -1968,7 +2122,7 @@ class ServiceConfiguration(ConfigurationBase):
         for format in image_formats_names:
             opts = self.context.globals.image_options.image_opts({}, format)
             if opts.format in image_formats:
-                log.warn('duplicate mime-type for WMS image_formats: "%s" already configured, will use last format',
+                log.warning('duplicate mime-type for WMS image_formats: "%s" already configured, will use last format',
                     opts.format)
             image_formats[opts.format] = opts
         info_types = conf.get('featureinfo_types')
@@ -2047,7 +2201,27 @@ class ServiceConfiguration(ConfigurationBase):
             image_formats=image_formats, srs=srs, services=services, restful_template=restful_template)
 
 
+def load_plugins():
+    """ Locate plugins that belong to the 'mapproxy' group and load them """
+    if sys.version_info >= (3, 8):
+        from importlib import metadata as importlib_metadata
+    else:
+        try:
+            import importlib_metadata
+        except ImportError:
+            return
+
+    for dist in importlib_metadata.distributions():
+        for ep in dist.entry_points:
+            if ep.group == 'mapproxy':
+                log.info('Loading plugin from package %s' % dist.metadata['name'])
+                ep.load().plugin_entrypoint()
+
+
 def load_configuration(mapproxy_conf, seed=False, ignore_warnings=True, renderd=False):
+
+    load_plugins()
+
     conf_base_dir = os.path.abspath(os.path.dirname(mapproxy_conf))
 
     # A configuration is checked/validated four times, each step has a different
@@ -2062,16 +2236,14 @@ def load_configuration(mapproxy_conf, seed=False, ignore_warnings=True, renderd=
         conf_dict = load_configuration_file([os.path.basename(mapproxy_conf)], conf_base_dir)
     except YAMLError as ex:
         raise ConfigurationError(ex)
-
     errors, informal_only = validate_options(conf_dict)
     for error in errors:
-        log.warn(error)
+        log.warning(error)
     if not informal_only or (errors and not ignore_warnings):
         raise ConfigurationError('invalid configuration')
-
     errors = validate_references(conf_dict)
     for error in errors:
-        log.warn(error)
+        log.warning(error)
 
     return ProxyConfiguration(conf_dict, conf_base_dir=conf_base_dir, seed=seed,
         renderd=renderd)
@@ -2086,9 +2258,7 @@ def load_configuration_file(files, working_dir):
         conf_file = os.path.normpath(os.path.join(working_dir, conf_file))
         log.info('reading: %s' % conf_file)
         current_dict = load_yaml_file(conf_file)
-
         conf_dict['__config_files__'][os.path.abspath(conf_file)] = os.path.getmtime(conf_file)
-
         if 'base' in current_dict:
             current_working_dir = os.path.dirname(conf_file)
             base_files = current_dict.pop('base')
@@ -2096,9 +2266,8 @@ def load_configuration_file(files, working_dir):
                 base_files = [base_files]
             imported_dict = load_configuration_file(base_files, current_working_dir)
             current_dict = merge_dict(current_dict, imported_dict)
-
         conf_dict = merge_dict(conf_dict, current_dict)
-
+    
     return conf_dict
 
 def merge_dict(conf, base):
@@ -2143,5 +2312,3 @@ def parse_color(color):
         return r, g, b, a
 
     return r, g, b
-
-

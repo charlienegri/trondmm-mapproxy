@@ -23,7 +23,7 @@ from mapproxy.grid import NoTiles, GridError, merge_resolution_range, bbox_inter
 from mapproxy.image import SubImageSource, bbox_position_in_image
 from mapproxy.image.opts import ImageOptions
 from mapproxy.image.tile import TiledImage
-from mapproxy.srs import SRS, bbox_equals, merge_bbox, make_lin_transf
+from mapproxy.srs import SRS, bbox_equals, merge_bbox, make_lin_transf, SupportedSRS
 from mapproxy.proj import ProjError
 from mapproxy.compat import iteritems
 
@@ -136,7 +136,11 @@ class MapQuery(object):
         return dict((k, v) for k, v in iteritems(self.dimensions) if k.lower() in params)
 
     def __repr__(self):
-        return "MapQuery(bbox=%(bbox)s, size=%(size)s, srs=%(srs)r, format=%(format)s)" % self.__dict__
+        info = self.__dict__
+        serialized_dimensions = ", ".join(["'%s': '%s'" % (key, value) for (key, value) in self.dimensions.items()])
+        info["serialized_dimensions"] = serialized_dimensions
+        return "MapQuery(bbox=%(bbox)s, size=%(size)s, srs=%(srs)r, format=%(format)s, dimensions={%(serialized_dimensions)s)}" % info
+
 
 class InfoQuery(object):
     def __init__(self, bbox, size, srs, pos, info_format, format=None,
@@ -196,7 +200,7 @@ class MapExtent(object):
     @property
     def llbbox(self):
         if not self._llbbox:
-            self._llbbox = self.srs.transform_bbox_to(SRS(4326), self.bbox)
+            self._llbbox = self.srs.transform_bbox_to(self.srs.get_geographic_srs(), self.bbox)
         return self._llbbox
 
     def bbox_for(self, srs):
@@ -232,7 +236,7 @@ class MapExtent(object):
             return self
         if self.is_default:
             return other
-        return MapExtent(merge_bbox(self.llbbox, other.llbbox), SRS(4326))
+        return MapExtent(merge_bbox(self.llbbox, other.llbbox), self.srs.get_geographic_srs())
 
     def contains(self, other):
         if not isinstance(other, MapExtent):
@@ -328,18 +332,17 @@ class ResolutionConditional(MapLayer):
 
 class SRSConditional(MapLayer):
     supports_meta_tiles = True
-    PROJECTED = 'PROJECTED'
-    GEOGRAPHIC = 'GEOGRAPHIC'
 
-    def __init__(self, layers, extent, opacity=None):
+    def __init__(self, layers, extent, opacity=None, preferred_srs=None):
         MapLayer.__init__(self)
-        # TODO geographic/projected fallback
         self.srs_map = {}
         self.res_range = merge_layer_res_ranges([l[0] for l in layers])
-        for layer, srss in layers:
-            for srs in srss:
-                self.srs_map[srs] = layer
 
+        supported_srs = []
+        for layer, srs in layers:
+            supported_srs.append(srs)
+            self.srs_map[srs] = layer
+        self.supported_srs = SupportedSRS(supported_srs, preferred_srs)
         self.extent = extent
         self.opacity = opacity
 
@@ -349,24 +352,8 @@ class SRSConditional(MapLayer):
         return layer.get_map(query)
 
     def _select_layer(self, query_srs):
-        # srs exists
-        if query_srs in self.srs_map:
-            return self.srs_map[query_srs]
-
-        # srs_type exists
-        srs_type = self.GEOGRAPHIC if query_srs.is_latlong else self.PROJECTED
-        if srs_type in self.srs_map:
-            return self.srs_map[srs_type]
-
-        # first with same type
-        is_latlong = query_srs.is_latlong
-        for srs in self.srs_map:
-            if hasattr(srs, 'is_latlong') and srs.is_latlong == is_latlong:
-                return self.srs_map[srs]
-
-        # return first
-        return self.srs_map.itervalues().next()
-
+        srs = self.supported_srs.best_srs(query_srs)
+        return self.srs_map[srs]
 
 class DirectMapLayer(MapLayer):
     supports_meta_tiles = True
@@ -401,7 +388,9 @@ class CacheMapLayer(MapLayer):
         self.tile_manager = tile_manager
         self.grid = tile_manager.grid
         self.extent = extent or map_extent_from_grid(self.grid)
-        self.res_range = merge_layer_res_ranges(self.tile_manager.sources)
+        self.res_range = []
+        if not self.tile_manager.rescale_tiles:
+            self.res_range = merge_layer_res_ranges(self.tile_manager.sources)
         self.max_tile_limit = max_tile_limit
 
     def get_map(self, query):
@@ -444,7 +433,7 @@ class CacheMapLayer(MapLayer):
         num_tiles = tile_grid[0] * tile_grid[1]
 
         if self.max_tile_limit and num_tiles >= self.max_tile_limit:
-            raise MapBBOXError("too many tiles")
+            raise MapBBOXError("too many tiles, max_tile_limit: %s, num_tiles: %s" % (self.max_tile_limit, num_tiles))
 
         if query.tiled_only:
             if num_tiles > 1:

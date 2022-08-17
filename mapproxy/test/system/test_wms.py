@@ -23,6 +23,7 @@ from io import BytesIO
 
 import pytest
 
+from mapproxy.image import ImageSource
 from mapproxy.srs import SRS
 from mapproxy.compat.image import Image
 from mapproxy.request.wms import (
@@ -41,6 +42,7 @@ from mapproxy.request.wms import (
     wms_request,
 )
 from mapproxy.test.image import is_jpeg, is_png, tmp_image, create_tmp_image
+from mapproxy.test.unit.test_image import assert_geotiff_tags
 from mapproxy.test.http import mock_httpd
 from mapproxy.test.helper import validate_with_dtd, validate_with_xsd
 from mapproxy.test.system import SysTest
@@ -193,6 +195,7 @@ class TestWMS111(SysTest):
                 "wms_cache_link_single",
                 "wms_cache_110",
                 "watermark_cache",
+                "wms_managed_cookies_cache",
             ]
         )
         assert layer_names == expected_names
@@ -293,6 +296,15 @@ class TestWMS111(SysTest):
         assert is_png(data)
         assert Image.open(data).mode == "RGB"
 
+    def test_get_map_float_size(self, app, fixture_cache_data):
+        self.common_map_req.params['width'] = '200.0'
+        resp = app.get(self.common_map_req)
+        assert "Cache-Control" not in resp.headers
+        assert resp.content_type == "image/png"
+        data = BytesIO(resp.body)
+        assert is_png(data)
+        assert Image.open(data).mode == "RGB"
+
     def test_get_map_png8_custom_format(self, app, fixture_cache_data):
         self.common_map_req.params["layers"] = "wms_cache"
         self.common_map_req.params["format"] = "image/png; mode=8bit"
@@ -349,6 +361,13 @@ class TestWMS111(SysTest):
         resp = app.get(self.common_map_req)
         assert resp.content_type == "image/jpeg"
         assert is_jpeg(BytesIO(resp.body))
+
+    def test_get_map_geotiff(self, app, fixture_cache_data):
+        self.common_map_req.params["format"] = "image/tiff"
+        resp = app.get(self.common_map_req)
+        assert resp.content_type == "image/tiff"
+        img = ImageSource(BytesIO(resp.body)).as_image()
+        assert_geotiff_tags(img, (-180, 80), (180/200.0, 80/200.0), 4326, False)
 
     def test_get_map_xml_exception(self, app):
         self.common_map_req.params["bbox"] = "0,0,90,90"
@@ -542,7 +561,7 @@ class TestWMS111(SysTest):
 
     def test_get_map_broken_bbox(self, app):
         url = (
-            """/service?VERSION=1.1.11&REQUEST=GetMap&SRS=EPSG:31468&BBOX=-10000855.0573254,2847125.18913603,-9329367.42767611,4239924.78564583&WIDTH=130&HEIGHT=62&LAYERS=wms_cache&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE"""
+            """/service?VERSION=1.1.11&REQUEST=GetMap&SRS=EPSG:31468&BBOX=-20000855.0573254,2847125.18913603,-19329367.42767611,4239924.78564583&WIDTH=130&HEIGHT=62&LAYERS=wms_cache&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE"""
         )
         resp = app.get(url)
         is_111_exception(resp.lxml, "Could not transform BBOX: Invalid result.")
@@ -884,6 +903,7 @@ class TestWMS110(SysTest):
                 "wms_cache_link_single",
                 "wms_cache_110",
                 "watermark_cache",
+                "wms_managed_cookies_cache",
             ]
         )
         assert layer_names == expected_names
@@ -1038,6 +1058,41 @@ class TestWMS110(SysTest):
         assert "tms_cache is not queryable" in xml.xpath("//ServiceException/text()")[0]
         assert validate_with_dtd(xml, "wms/1.1.0/exception_1_1_0.dtd")
 
+    def test_managed_cookies(self, app):
+        def assert_no_cookie(req_handler):
+            return 'Cookie' not in req_handler.headers
+
+        def assert_cookie(req_handler):
+            assert 'Cookie' in req_handler.headers
+            cookie_name, cookie_val = req_handler.headers['Cookie'].split(';')[0].split('=')
+            assert cookie_name == 'testcookie'
+            assert cookie_val == '42'
+            return True
+
+        url = (r"/service?LAYERs=layer1&SERVICE=WMS&FORMAT=image%2Fpng"
+                "&REQUEST=GetFeatureInfo&HEIGHT=200&SRS=EPSG%3A900913"
+                "&VERSION=1.1.1&BBOX=1000.0,400.0,2000.0,1400.0&styles="
+                "&WIDTH=200&QUERY_LAYERS=layer1&X=10&Y=20")
+        # First response has a Set-Cookie => with managed_cookies=True, mapproxy should send the
+        # cookie in the second request
+        expected_requests = [
+            (
+                {'path': url, 'req_assert_function': assert_no_cookie},
+                {'body': b'nothing', 'headers': {'Set-Cookie': "testcookie=42"}}
+            ),
+            (
+                {'path': url, 'req_assert_function': assert_cookie},
+                {'body': b'nothing'}
+            )
+        ]
+        with mock_httpd(("localhost", 42423), expected_requests):
+            self.common_fi_req.params["layers"] = "wms_managed_cookies_cache"
+            self.common_fi_req.params["query_layers"] = "wms_managed_cookies_cache"
+            resp = app.get(self.common_fi_req)
+            assert resp.body == b"nothing"
+            resp = app.get(self.common_fi_req)
+            assert resp.body == b"nothing"
+
 
 class TestWMS100(SysTest):
     config_file = "layer.yaml"
@@ -1101,6 +1156,7 @@ class TestWMS100(SysTest):
                 "wms_cache_link_single",
                 "wms_cache_110",
                 "watermark_cache",
+                "wms_managed_cookies_cache",
             ]
         )
         assert layer_names == expected_names
@@ -1316,6 +1372,7 @@ class TestWMS130(SysTest):
                 "wms_cache_link_single",
                 "wms_cache_110",
                 "watermark_cache",
+                "wms_managed_cookies_cache",
             ]
         )
         assert layer_names == expected_names

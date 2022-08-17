@@ -79,7 +79,7 @@ class RedisCache(TileCacheBase):
             return True
         return False
 
-    def remove_tile(self, tile):
+    def remove_tile(self, tile, dimensions=None):
         if tile.coord is None:
             return True
 

@@ -36,6 +36,16 @@ def validate_options(conf_dict):
     else:
         return [], True
 
+time_spec = {
+    'seconds': number(),
+    'minutes': number(),
+    'hours': number(),
+    'days': number(),
+    'weeks': number(),
+    'time': anything(),
+    'mtime': str(),
+}
+
 coverage = recursive({
     'polygons': str(),
     'polygons_srs': str(),
@@ -71,9 +81,11 @@ http_opts = {
     'client_timeout': number(),
     'ssl_no_cert_checks': bool(),
     'ssl_ca_certs': str(),
+    'hide_error_details': bool(),
     'headers': {
         anything(): str()
     },
+    'manage_cookies': bool(),
 }
 
 mapserver_opts = {
@@ -183,6 +195,7 @@ on_error = {
     anything(): {
         required('response'): one_of([int], str),
         'cache': bool,
+        'authorize_stale': bool
     }
 }
 
@@ -390,6 +403,7 @@ mapproxy_yaml_spec = {
           'axis_order_ne': [str()],
           'axis_order_en': [str()],
           'proj_data_dir': str(),
+          'preferred_src_proj': {anything(): [str()]},
         },
         'tiles': {
             'expires_hours': number(),
@@ -420,6 +434,10 @@ mapproxy_yaml_spec = {
             'use_direct_from_level': number(),
             'use_direct_from_res': number(),
             'link_single_color_images': bool(),
+            'cache_rescaled_tiles': bool(),
+            'upscale_tiles': int(),
+            'downscale_tiles': int(),
+            'refresh_before': time_spec,
             'watermark': {
                 'text': string_type,
                 'font_size': number(),
@@ -483,6 +501,7 @@ mapproxy_yaml_spec = {
                     'legendurl': str(),
                     'featureinfo_format': str(),
                     'featureinfo_xslt': str(),
+                    'featureinfo_out_format': str(),
                 },
                 'image': combined(image_opts, {
                     'opacity':number(),
@@ -492,6 +511,7 @@ mapproxy_yaml_spec = {
                 'supported_formats': [str()],
                 'supported_srs': [str()],
                 'http': http_opts,
+                'on_error': on_error,
                 'forward_req_params': [str()],
                 required('req'): {
                     required('url'): str(),
@@ -554,7 +574,8 @@ mapproxy_yaml_spec = {
                     'featureinfo_return_geometries': bool(),
                 },
                 'supported_srs': [str()],
-                'http': http_opts
+                'http': http_opts,
+                'on_error': on_error
             }),
             'debug': {
             },
@@ -586,18 +607,33 @@ mapproxy_yaml_spec = {
             }
         })])
     ),
-     # `parts` can be used for partial configurations that are referenced
-     # from other sections (e.g. coverages, dimensions, etc.)
+    # `parts` can be used for partial configurations that are referenced
+    # from other sections (e.g. coverages, dimensions, etc.)
     'parts': anything(),
 }
 
-if __name__ == '__main__':
-    import sys
-    import yaml
-    for f in sys.argv[1:]:
-        data = yaml.load(open(f))
-        try:
-            validate(mapproxy_yaml_spec, data)
-        except ValidationError as ex:
-            for err in ex.errors:
-                print('%s: %s' % (f, err))
+
+def add_source_to_mapproxy_yaml_spec(source_name, source_spec):
+    """ Add a new source type to mapproxy_yaml_spec.
+        Used by plugins.
+    """
+
+    # sources has a single anything() : {} member
+    values = list(mapproxy_yaml_spec['sources'].values())
+    assert len(values) == 1
+    values[0].add_subspec(source_name, source_spec)
+
+
+def add_service_to_mapproxy_yaml_spec(service_name, service_spec):
+    """ Add a new service type to mapproxy_yaml_spec.
+        Used by plugins.
+    """
+
+    mapproxy_yaml_spec['services'][service_name] = service_spec
+
+
+def add_subcategory_to_layer_md(category_name, category_def):
+    """ Add a new category to wms_130_layer_md.
+        Used by plugins
+    """
+    wms_130_layer_md[category_name] = category_def

@@ -17,6 +17,7 @@
 Service requests (parsing, handling, etc).
 """
 import codecs
+import re
 from mapproxy.request.wms import exception
 from mapproxy.exception import RequestError
 from mapproxy.srs import SRS, make_lin_transf
@@ -72,8 +73,8 @@ class WMSMapRequestParams(RequestParams):
         """
         if 'height' not in self or 'width' not in self:
             return None
-        width = int(self.params['width'])
-        height = int(self.params['height'])
+        width = int(float(self.params['width'])) # allow float sizes (100.0), but truncate decimals
+        height = int(float(self.params['height']))
         return (width, height)
     def _set_size(self, value):
         self['width'] = str(value[0])
@@ -192,6 +193,22 @@ class WMSMapRequest(WMSRequest):
         self.dimensions = self._get_dimensions(param)
         WMSRequest.__init__(self, param=param, url=url, validate=validate,
                             non_strict=non_strict, **kw)
+    
+    def _get_dimensions(self, param):
+        if param:
+            regex = "(?i)%s%s" % (("^%s|" % self.dimension_prefix if self.dimension_prefix else ""),
+                                  "^(%s)$" % "|".join(self.dimension_params))
+            keys = []
+            if isinstance(param, RequestParams):
+                keys = list(map (lambda k: k[0], param.iteritems()))
+            else:
+                keys = list(param.keys())
+            if len(keys) > 0:
+                return dict(map(lambda k: (k, param.get(k)), filter (lambda k: re.search(regex, k), keys)))
+            else:
+                return None
+        else:
+            return None
 
     def _get_dimensions(self, param):
         import re
@@ -353,7 +370,7 @@ def switch_bbox_epsg_axis_order(bbox, srs):
             if SRS(srs).is_axis_order_ne:
                 return bbox[1], bbox[0], bbox[3], bbox[2]
         except RuntimeError:
-            log.warn('unknown SRS %s' % srs)
+            log.warning('unknown SRS %s' % srs)
     return bbox
 
 def _switch_bbox(self):

@@ -48,7 +48,7 @@ def parse_levels(level_str):
     levels = set()
     for part in level_str.split(','):
         part = part.strip()
-        if re.match('\d+..\d+', part):
+        if re.match(r'\d+..\d+', part):
             from_level, to_level = part.split('..')
             levels.update(list(range(int(from_level), int(to_level) + 1)))
         else:
@@ -65,7 +65,7 @@ def parse_grid_definition(definition):
     grid_conf = {}
     for arg in args:
         key, value = arg.split('=')
-        value = yaml.load(value)
+        value = yaml.safe_load(value)
         grid_conf[key] = value
 
     validate(conf_spec.grid_opts, grid_conf)
