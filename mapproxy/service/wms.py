@@ -697,11 +697,7 @@ class WMSLayer(WMSLayerBase):
     is_active = True
     layers = []
     def __init__(self, name, title, map_layers, info_layers=[], legend_layers=[],
-<<<<<<< HEAD
                  res_range=None, md=None, dimensions=None):
-=======
-                 res_range=None, md=None,dimensions=None):
->>>>>>> upstream/master
         self.name = name
         self.title = title
         self.md = md or {}
