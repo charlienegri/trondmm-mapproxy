@@ -106,7 +106,7 @@ def level_part(level):
         return "%02d" % level
 
 
-<<<<<<< HEAD
+#<<<<<<< HEAD
 def tile_location_tc(tile, cache_dir, file_ext, create_dir=False, dimensionlist=None, dimensions=None):
 #=======
 #def tile_location_tc(tile, cache_dir, file_ext, create_dir=False, dimensions=None):
