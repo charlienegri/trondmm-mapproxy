@@ -133,7 +133,13 @@ class TileManager(object):
             for created_tile in created_tiles:
                 if created_tile.coord == tile_coord:
                     return created_tile
-#=======
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+         if not tile : 
+             return self.load_tile_coords(
+                 [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
+             )[0]
+                 
+#=======      
 #        return self.load_tile_coords(
 #            [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
 #        )[0]

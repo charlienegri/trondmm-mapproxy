@@ -120,13 +120,13 @@ class RecordFileCache(FileCache):
             FileCache.store_tile(self, tile,dimensions=dimensions)
 
 #<<<<<<< HEAD
-    def load_tile(self, tile, with_metadata=False, dimensions=None):
+#    def load_tile(self, tile, with_metadata=False, dimensions=None):
 #=======
-#    def load_tile(self, tile, with_metadata=False,dimensions=None):
-#        if tile.source:
-#            # Do not record tiles with source as "loaded" as FileCache will
-#            # return tile without checking/loading from filesystem.
-#            return True
+    def load_tile(self, tile, with_metadata=False,dimensions=None):
+        if tile.source:
+            # Do not record tiles with source as "loaded" as FileCache will
+            # return tile without checking/loading from filesystem.
+            return True
 #>>>>>>> upstream/master
         self.loaded_tiles.add(tile.coord)
         return FileCache.load_tile(self, tile, with_metadata,dimensions=dimensions)
