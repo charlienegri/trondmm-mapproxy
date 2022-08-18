@@ -56,13 +56,13 @@ def level_location(level, cache_dir, dimensionlist=None, dimensions=None):
         return os.path.join(cache_dir, dim_path, level)
     else:
         return os.path.join(cache_dir, dim_path, "%02d" % level)
-#<<<<<<< HEAD
+#<<<<<<< HEAD # changed date to be consistent with tests
 
 def dimensions_part(dimensionlist, dimensions):
     """
     Return the subpath where all tiles for `dimensions` will be stored.
-    >>> dimensions_part(['reference-time', 'time'], {"time": "2016-11-24T18:00Z", "reference-time": "2016-11-24T00:00Z"})
-    '2016-11-24T00:00Z/2016-11-24T18:00Z'
+    >>> dimensions_part(['reference-time', 'time'], {"time": "2020-08-25T00:00:00Z", "reference-time": "2020-08-25T00:00:00Z"})
+    '2020-08-25T00:00:00Z/2020-08-25T00:00:00Z'
     """
     if dimensionlist:
         dims = NoCaseMultiDict(dimensions)
