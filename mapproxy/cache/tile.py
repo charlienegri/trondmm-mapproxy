@@ -135,9 +135,9 @@ class TileManager(object):
                     return created_tile
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
          if not tile : 
-             return self.load_tile_coords(
+            return self.load_tile_coords(
                  [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
-             )[0]
+            )[0]
                  
 #=======      
 #        return self.load_tile_coords(
