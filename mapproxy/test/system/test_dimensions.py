@@ -109,7 +109,8 @@ class TestDimensionsWMS130(SysTest):
                 assert resp.content_type == "image/png"
 
         assert cache_dir.join(
-            "test_cache_EPSG900913/time-2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
+            #"test_cache_EPSG900913/time-2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
+            "test_cache_EPSG900913/2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"            
         ).check()
 
 class TestDimensionsWMS111(SysTest):
@@ -175,7 +176,8 @@ class TestDimensionsWMS111(SysTest):
                 assert resp.content_type == "image/png"
 
         assert cache_dir.join(
-            "test_cache_EPSG900913/time-2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
+            #"test_cache_EPSG900913/time-2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
+            "test_cache_EPSG900913/2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
         ).check()
 
 class TestDimensionsWMS110(SysTest):
@@ -244,7 +246,8 @@ class TestDimensionsWMS110(SysTest):
                 assert resp.content_type == "image/png"
 
         assert cache_dir.join(
-            "test_cache_EPSG900913/time-2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
+            #"test_cache_EPSG900913/time-2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
+            "test_cache_EPSG900913/2020-09-22T14:20:00Z/01/000/000/001/000/000/001.jpeg"
         ).check()
 
 class TestDimensionsWMS100(SysTest):
