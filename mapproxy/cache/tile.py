@@ -123,26 +123,25 @@ class TileManager(object):
 
     def load_tile_coord(self, tile_coord, dimensions=None, with_metadata=False):
 #<<<<<<< HEAD
-        tile = Tile(tile_coord)
-        self.cache.load_tile(tile, with_metadata, dimensions=dimensions)
-
-        if tile.coord is not None and not self.is_cached(tile, dimensions=dimensions):
-            # missing or staled
-            creator = self.creator(dimensions=dimensions)
-            created_tiles = creator.create_tiles([tile])
-            for created_tile in created_tiles:
-                if created_tile.coord == tile_coord:
-                    return created_tile
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        if not tile : 
-            return self.load_tile_coords(
-                 [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
-            )[0]
-                 
+#        tile = Tile(tile_coord)
+#        self.cache.load_tile(tile, with_metadata, dimensions=dimensions)
+#
+#        if tile.coord is not None and not self.is_cached(tile, dimensions=dimensions):
+#            # missing or staled
+#            creator = self.creator(dimensions=dimensions)
+#            created_tiles = creator.create_tiles([tile])
+#            for created_tile in created_tiles:
+#                if created_tile.coord == tile_coord:
+#                    return created_tile
+##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#        if not tile : 
+#            return self.load_tile_coords(
+#                 [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
+#            )[0]                 
 #=======      
-#        return self.load_tile_coords(
-#            [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
-#        )[0]
+        return self.load_tile_coords(
+            [tile_coord], dimensions=dimensions, with_metadata=with_metadata,
+        )[0]
 #>>>>>>> upstream/master
 
 
