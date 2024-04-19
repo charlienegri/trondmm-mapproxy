@@ -25,10 +25,13 @@ from mapproxy.cache.base import TileCacheBase, tile_buffer
 import logging
 log = logging.getLogger('mapproxy.cache.file')
 
+
 class FileCache(TileCacheBase):
     """
     This class is responsible to store and load the actual tile data.
     """
+    supports_dimensions = True
+
     def __init__(self, cache_dir, file_ext, directory_layout='tc',
                  link_single_color_images=False, coverage=None, image_opts=None):
         """

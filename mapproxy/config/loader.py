@@ -1139,6 +1139,38 @@ class CacheConfiguration(ConfigurationBase):
             coverage=coverage
         )
 
+    def _mbtiles_dimensions_cache(self, grid_conf, file_ext):
+        from mapproxy.cache.mbtiles import MBTilesDimensionsCache
+
+        dimensionlist = self.conf['cache'].get("dimensions")
+
+        cache_dir = self.conf['cache'].get('directory')
+        if cache_dir:
+            cache_dir = os.path.join(
+                self.context.globals.abspath(cache_dir),
+                self.conf['name'],
+                grid_conf.tile_grid().name
+            )
+        else:
+            cache_dir = self.cache_dir()
+            cache_dir = os.path.join(
+                cache_dir,
+                self.conf['name'],
+                grid_conf.tile_grid().name
+            )
+
+        sqlite_timeout = self.context.globals.get_value('cache.sqlite_timeout', self.conf)
+        wal = self.context.globals.get_value('cache.sqlite_wal', self.conf)
+        coverage = self.coverage()
+
+        return MBTilesDimensionsCache(
+            cache_dir,
+            timeout=sqlite_timeout,
+            wal=wal,
+            dimensionlist=dimensionlist,
+            coverage=coverage,
+        )
+
     def _geopackage_cache(self, grid_conf, image_opts):
         from mapproxy.cache.geopackage import GeopackageCache, GeopackageLevelCache
 
@@ -1900,10 +1932,10 @@ class LayerConfiguration(ConfigurationBase):
             for grid, extent, cache_source in self.context.caches[cache_name].caches():
                 disable_storage = self.context.configuration['caches'][cache_name].get('disable_storage', False)
                 if disable_storage:
-                    supported_cache_class = DummyCache
+                    supports_dimensions = isinstance(cache_source.cache, DummyCache)
                 else:
-                    supported_cache_class = FileCache
-                if dimensions and not isinstance(cache_source.cache, supported_cache_class):
+                    supports_dimensions = cache_source.cache.supports_dimensions
+                if dimensions and not supports_dimensions:
                     # caching of dimension layers is not supported yet
                     raise ConfigurationError(
                         "caching of dimension layer (%s) is not supported yet."
